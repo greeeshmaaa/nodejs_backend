@@ -1,0 +1,82 @@
+const express = require('express');
+const mysql = require('mysql');
+const bodyParser = require('body-parser');
+
+const app = express();
+const port = 3000;
+
+// Middleware to parse JSON requests
+app.use(bodyParser.json());
+
+// MySQL connection setup
+const db = mysql.createConnection({
+  host: 'localhost',
+  user: 'root',
+  password: '182002',
+  database: 'EmpowerHer',
+});
+
+db.connect((err) => {
+  if (err) {
+    console.error('Error connecting to MySQL:', err);
+  } else {
+    console.log('Connected to MySQL database');
+  }
+});
+
+// Create a users table in MySQL
+const createUsersTable = `
+  CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+  );
+`;
+
+db.query(createUsersTable, (err) => {
+  if (err) {
+    console.error('Error creating users table:', err);
+  } else {
+    console.log('Users table created or already exists');
+  }
+});
+
+// API endpoint for user registration (signup)
+app.post('/api/signup', (req, res) => {
+  const { name, phone_number, email } = req.body;
+
+  const insertUserQuery = 'INSERT INTO users (name, phone_number, email) VALUES (?, ?, ?)';
+
+  db.query(insertUserQuery, [name, phone_number, email], (err) => {
+    if (err) {
+      console.error('Error inserting user:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    } else {
+      res.json({ message: 'User registered successfully' });
+    }
+  });
+});
+
+// API endpoint for user login
+app.post('/api/login', (req, res) => {
+  const { email, password } = req.body;
+
+  const getUserQuery = 'SELECT * FROM users WHERE email = ? AND password = ?';
+
+  db.query(getUserQuery, [email, password], (err, results) => {
+    if (err) {
+      console.error('Error retrieving user:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    } else if (results.length === 0) {
+      res.status(401).json({ error: 'Invalid credentials' });
+    } else {
+      res.json({ message: 'Login successful' });
+    }
+  });
+});
+
+// Start the server
+app.listen(port, () => {
+  console.log('Server is running on port ${port}');
+});
