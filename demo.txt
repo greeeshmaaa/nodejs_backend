@@ -1,14 +1,15 @@
 const express = require('express');
 const mysql = require('mysql');
 const bodyParser = require('body-parser');
-
+const bcrypt = require('bcrypt');
+const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session);
 const app = express();
 const port = 3000;
 
-// Middleware to parse JSON requests
 app.use(bodyParser.json());
 
-// MySQL connection setup
+// Assuming your MySQLStore configuration is correct and matches your database configuration.
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
@@ -16,67 +17,182 @@ const db = mysql.createConnection({
   database: 'EmpowerHer',
 });
 
-db.connect((err) => {
-  if (err) {
-    console.error('Error connecting to MySQL:', err);
-  } else {
-    console.log('Connected to MySQL database');
+db.connect(err => {
+  if (err) throw err;
+  console.log("Connected to the database.");
+});
+
+const sessionStore = new MySQLStore({}, db);
+
+app.use(
+  session({
+    secret: 'your_secret_key',
+    resave: false,
+    saveUninitialized: false,
+    store: sessionStore,
+  })
+);
+
+app.post('/api/signup', async (req, res) => {
+  try {
+    const { name, phone_number, email, password } = req.body;
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const insertUserQuery = 'INSERT INTO users (name, phone_number, email, password) VALUES (?, ?, ?, ?)';
+    db.query(insertUserQuery, [name, phone_number, email, hashedPassword], (err) => {
+      if (err) {
+        console.error('Error inserting user:', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+      } else {
+        req.session.userName = name; // Set the session variable for the user's name
+        res.json({ message: 'User registered successfully', sessionToken: req.sessionID });
+      }
+    });
+  } catch (error) {
+    console.error('Unexpected error during user registration:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// Create a users table in MySQL
-const createUsersTable = `
-  CREATE TABLE IF NOT EXISTS users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    phone_number VARCHAR(255) NOT NULL,
-    email VARCHAR(255) NOT NULL,
-  );
-`;
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
 
-db.query(createUsersTable, (err) => {
-  if (err) {
-    console.error('Error creating users table:', err);
-  } else {
-    console.log('Users table created or already exists');
+    const selectUserQuery = 'SELECT * FROM users WHERE email = ?';
+    db.query(selectUserQuery, [email], async (err, results) => {
+      if (err) {
+        console.error('Error retrieving user:', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+      } else {
+        if (results.length === 0) {
+          res.status(401).json({ error: 'User not found' });
+        } else {
+          const user = results[0];
+          const passwordMatch = await bcrypt.compare(password, user.password);
+          if (passwordMatch) {
+            req.session.userName = user.name; // Set the session variable for the user's name
+            res.json({ message: 'Login successful', sessionToken: req.sessionID, userName: user.name });
+          } else {
+            res.status(401).json({ error: 'Invalid credentials' });
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Unexpected error during login:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// API endpoint for user registration (signup)
-app.post('/api/signup', (req, res) => {
-  const { name, phone_number, email } = req.body;
+app.post('/api/friend-requests/send', async (req, res) => {
+  if (!req.session.userID) {
+    return res.status(401).json({ error: "Please log in to send friend requests." });
+  }
+  
+  const senderId = req.session.userID;
+  const receiverEmail = req.body.receiverEmail;
 
-  const insertUserQuery = 'INSERT INTO users (name, phone_number, email) VALUES (?, ?, ?)';
+  if (!receiverEmail) {
+    return res.status(400).json({ error: "Receiver email is required." });
+  }
 
-  db.query(insertUserQuery, [name, phone_number, email], (err) => {
-    if (err) {
-      console.error('Error inserting user:', err);
-      res.status(500).json({ error: 'Internal Server Error' });
-    } else {
-      res.json({ message: 'User registered successfully' });
+  const getUserQuery = 'SELECT id FROM users WHERE email = ?';
+  db.query(getUserQuery, [receiverEmail], (err, results) => {
+    if (err || results.length === 0) {
+      return res.status(404).json({ error: "Receiver not found." });
     }
+    const receiverId = results[0].id;
+    if (senderId === receiverId) {
+      return res.status(400).json({ error: "You cannot send a friend request to yourself." });
+    }
+    const insertFriendRequestQuery = 'INSERT INTO friend_requests (sender_id, receiver_id, status) VALUES (?, ?, "pending")';
+    db.query(insertFriendRequestQuery, [senderId, receiverId], (err) => {
+      if (err) {
+        return res.status(500).json({ error: 'Internal Server Error' });
+      }
+      res.json({ message: 'Friend request sent successfully.' });
+    });
   });
 });
 
-// API endpoint for user login
-app.post('/api/login', (req, res) => {
-  const { email, password } = req.body;
+// Route to view incoming friend requests, now uses session userID
+app.get('/api/friend-requests/incoming', async (req, res) => {
+  if (!req.session.userID) {
+    return res.status(401).json({ error: "Please log in to view friend requests." });
+  }
+  
+  const userId = req.session.userID;
+  const getFriendRequestsQuery = 'SELECT u.id, u.name, u.email FROM friend_requests fr JOIN users u ON fr.sender_id = u.id WHERE fr.receiver_id = ? AND fr.status = "pending"';
 
-  const getUserQuery = 'SELECT * FROM users WHERE email = ? AND password = ?';
-
-  db.query(getUserQuery, [email, password], (err, results) => {
+  db.query(getFriendRequestsQuery, [userId], (err, friendRequests) => {
     if (err) {
-      console.error('Error retrieving user:', err);
-      res.status(500).json({ error: 'Internal Server Error' });
-    } else if (results.length === 0) {
-      res.status(401).json({ error: 'Invalid credentials' });
-    } else {
-      res.json({ message: 'Login successful' });
+      return res.status(500).json({ error: 'Internal Server Error', details: err.toString() });
     }
+    res.json({ friendRequests });
   });
 });
 
-// Start the server
 app.listen(port, () => {
-  console.log('Server is running on port ${port}');
+  console.log(`Server is running on port ${port}`);
+});
+
+
+// Endpoint to send friend requests
+app.post('/api/friend-requests/send', async (req, res) => {
+  try {
+    if (!req.session.userID) {
+      return res.status(401).json({ error: "Please log in to send friend requests." });
+    }
+    
+    const senderId = req.session.userID;
+    const receiverEmail = req.body.receiverEmail;
+
+    if (!receiverEmail) {
+      return res.status(400).json({ error: "Receiver email is required." });
+    }
+
+    const getUserQuery = 'SELECT id FROM users WHERE email = ?';
+    db.query(getUserQuery, [receiverEmail], (err, results) => {
+      if (err || results.length === 0) {
+        return res.status(404).json({ error: "Receiver not found." });
+      }
+      const receiverId = results[0].id;
+      if (senderId === receiverId) {
+        return res.status(400).json({ error: "You cannot send a friend request to yourself." });
+      }
+      const insertFriendRequestQuery = 'INSERT INTO friend_requests (sender_id, receiver_id, status, created_at, updated_at) VALUES (?, ?, "pending", NOW(), NOW())';
+      db.query(insertFriendRequestQuery, [senderId, receiverId], (err) => {
+        if (err) {
+          return res.status(500).json({ error: 'Internal Server Error' });
+        }
+        res.json({ message: 'Friend request sent successfully.' });
+      });
+    });
+  } catch (error) {
+    console.error('Unexpected error during friend request:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Endpoint to view incoming friend requests
+app.get('/api/friend-requests/incoming', async (req, res) => {
+  try {
+    if (!req.session.userID) {
+      return res.status(401).json({ error: "Please log in to view friend requests." });
+    }
+    
+    const userId = req.session.userID;
+    const getFriendRequestsQuery = 'SELECT u.id, u.name, u.email FROM friend_requests fr JOIN users u ON fr.sender_id = u.id WHERE fr.receiver_id = ? AND fr.status = "pending"';
+
+    db.query(getFriendRequestsQuery, [userId], (err, friendRequests) => {
+      if (err) {
+        return res.status(500).json({ error: 'Internal Server Error', details: err.toString() });
+      }
+      res.json({ friendRequests });
+    });
+  } catch (error) {
+    console.error('Unexpected error during friend request retrieval:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
