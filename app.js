@@ -210,6 +210,35 @@ app.post('/api/friend-requests/accept/:requestId', async (req, res) => {
   });
 });
 
+// Fetch friends list
+app.get('/api/friends', async (req, res) => {
+  if (!req.session.userID) {
+      return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const userId = req.session.userID;
+  const query = `
+      SELECT u.id, u.name, u.email 
+      FROM users u
+      INNER JOIN (
+          SELECT CASE 
+                  WHEN sender_id = ? THEN receiver_id 
+                  WHEN receiver_id = ? THEN sender_id 
+                 END AS friendId
+          FROM friend_requests 
+          WHERE (sender_id = ? OR receiver_id = ?) AND status = 'accepted'
+      ) fr ON u.id = fr.friendId
+  `;
+
+  db.query(query, [userId, userId, userId, userId], (err, results) => {
+      if (err) {
+          console.error('Error fetching friends:', err);
+          return res.status(500).json({ error: 'Internal Server Error' });
+      }
+      res.json(results);
+  });
+});
+
 
 
 // Start the server
