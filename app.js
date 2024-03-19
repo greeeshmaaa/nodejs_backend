@@ -170,6 +170,45 @@ app.post('/api/friend-request', (req, res) => {
   });
 });
 
+app.get('/api/friend-requests/received', async (req, res) => {
+  if (!req.session.userID) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const receiverId = req.session.userID;
+  const query = 'SELECT fr.id, fr.sender_id, fr.status, u.name, u.email FROM friend_requests fr JOIN users u ON fr.sender_id = u.id WHERE fr.receiver_id = ? AND fr.status = "pending"';
+
+  db.query(query, [receiverId], (err, results) => {
+    if (err) {
+      console.error('Error fetching received friend requests:', err);
+      return res.status(500).json({ error: 'Internal Server Error' });
+    }
+
+    res.json(results);
+  });
+});
+
+app.post('/api/friend-requests/accept/:requestId', async (req, res) => {
+  if (!req.session.userID) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { requestId } = req.params;
+  const updateQuery = 'UPDATE friend_requests SET status = "accepted" WHERE id = ?';
+
+  db.query(updateQuery, [requestId], (err, result) => {
+    if (err) {
+      console.error('Error accepting friend request:', err);
+      return res.status(500).json({ error: 'Internal Server Error' });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Friend request not found or already accepted' });
+    }
+
+    res.json({ message: 'Friend request accepted' });
+  });
+});
 
 
 
