@@ -1,20 +1,22 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
+
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
 
 // MySQL connection configuration
 const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: '182002',
-  database: 'EmpowerHer',
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_DATABASE,
 });
 
 // Connect to the database
@@ -28,20 +30,12 @@ const sessionStore = new MySQLStore({}, db);
 
 // Session middleware configuration
 app.use(session({
-  secret: 'your_secret_key',
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   store: sessionStore,
   cookie: { secure: false, httpOnly: true, maxAge: 1000 * 60 * 60 * 24 }
 }));
-
-app.use((req, res, next) => {
-  console.log('Session ID:', req.sessionID);
-  console.log('Session Data:', req.session);
-  next();
-});
-
-
 
 // User signup endpoint
 app.post('/api/signup', async (req, res) => {
@@ -210,9 +204,35 @@ app.post('/api/friend-requests/accept/:requestId', async (req, res) => {
   });
 });
 
+// Fetch friends list
+app.get('/api/friends', async (req, res) => {
+  if (!req.session.userID) {
+      return res.status(401).json({ error: 'Unauthorized' });
+  }
 
+  const userId = req.session.userID;
+  const query = `
+      SELECT u.id, u.name, u.email 
+      FROM users u
+      INNER JOIN (
+          SELECT CASE 
+                  WHEN sender_id = ? THEN receiver_id 
+                  WHEN receiver_id = ? THEN sender_id 
+                 END AS friendId
+          FROM friend_requests 
+          WHERE (sender_id = ? OR receiver_id = ?) AND status = 'accepted'
+      ) fr ON u.id = fr.friendId
+  `;
 
-// Start the server
+  db.query(query, [userId, userId, userId, userId], (err, results) => {
+      if (err) {
+          console.error('Error fetching friends:', err);
+          return res.status(500).json({ error: 'Internal Server Error' });
+      }
+      res.json(results);
+  });
+});
+
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
