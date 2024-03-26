@@ -209,6 +209,33 @@ app.get('/api/friends', async (req, res) => {
   if (!req.session.userID) {
       return res.status(401).json({ error: 'Unauthorized' });
   }
+<<<<<<< HEAD
+=======
+
+  const userId = req.session.userID;
+  const query = `
+      SELECT u.id, u.name, u.email 
+      FROM users u
+      INNER JOIN (
+          SELECT CASE 
+                  WHEN sender_id = ? THEN receiver_id 
+                  WHEN receiver_id = ? THEN sender_id 
+                 END AS friendId
+          FROM friend_requests 
+          WHERE (sender_id = ? OR receiver_id = ?) AND status = 'accepted'
+      ) fr ON u.id = fr.friendId
+  `;
+
+  db.query(query, [userId, userId, userId, userId], (err, results) => {
+      if (err) {
+          console.error('Error fetching friends:', err);
+          return res.status(500).json({ error: 'Internal Server Error' });
+      }
+      res.json(results);
+  });
+});
+
+>>>>>>> ef0797ea1da75e425d4b5467479207d2a5e79709
 
   const userId = req.session.userID;
   const query = `
